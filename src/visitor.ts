@@ -1,0 +1,222 @@
+import autoBind from "auto-bind";
+import { GraphQLSchema, Kind, OperationDefinitionNode, print } from "graphql";
+import {
+  ClientSideBasePluginConfig,
+  ClientSideBaseVisitor,
+  DocumentMode,
+  getConfigValue,
+  indentMultiline,
+  LoadedFragment,
+} from "@graphql-codegen/visitor-plugin-common";
+import { RawGraphQLRequestPluginConfig } from "./config.js";
+
+export interface GraphQLRequestPluginConfig extends ClientSideBasePluginConfig {
+  rawRequest: boolean;
+  extensionsType: string;
+  useWebSocketClient: boolean;
+}
+
+const additionalExportedTypes = `
+export type SdkFunctionWrapper = <T>(action: (requestHeaders?:Record<string, string>) => Promise<T>, operationName: string, operationType?: string, variables?: any) => Promise<T>;
+`;
+
+export class GraphQLRequestVisitor extends ClientSideBaseVisitor<
+  RawGraphQLRequestPluginConfig,
+  GraphQLRequestPluginConfig
+> {
+  private _externalImportPrefix: string;
+  private _operationsToInclude: {
+    node: OperationDefinitionNode;
+    documentVariableName: string;
+    operationType: string;
+    operationResultType: string;
+    operationVariablesTypes: string;
+  }[] = [];
+
+  constructor(
+    schema: GraphQLSchema,
+    fragments: LoadedFragment[],
+    rawConfig: RawGraphQLRequestPluginConfig
+  ) {
+    super(schema, fragments, rawConfig, {
+      rawRequest: getConfigValue(rawConfig.rawRequest, false),
+      extensionsType: getConfigValue(rawConfig.extensionsType, "any"),
+      useWebSocketClient: getConfigValue(rawConfig.useWebSocketClient, false),
+    });
+
+    autoBind(this);
+
+    const typeImport = this.config.useTypeImports ? "import type" : "import";
+    const fileExtension = this.config.emitLegacyCommonJSImports ? "" : ".js";
+    const buildPath = this.config.emitLegacyCommonJSImports ? "cjs" : "esm";
+
+    if (this.config.useWebSocketClient) {
+      this._additionalImports.push(
+        `${typeImport} { GraphQLWebSocketClient } from '@chromatic-protocol/graphql-request/build/esm/graphql-ws';`
+      );
+      this._additionalImports.push(
+        `${typeImport} { GraphQLSubscriber, UnsubscribeCallback } from '@chromatic-protocol/graphql-request/build/cjs/graphql-ws';`
+      );
+    } else {
+      this._additionalImports.push(
+        `${typeImport} { GraphQLClient } from '@chromatic-protocol/graphql-request';`
+      );
+      this._additionalImports.push(
+        `${typeImport} { GraphQLClientRequestHeaders } from '@chromatic-protocol/graphql-request/build/${buildPath}/types${fileExtension}';`
+      );
+    }
+
+    if (this.config.rawRequest) {
+      if (this.config.documentMode !== DocumentMode.string) {
+        this._additionalImports.push(
+          `import { GraphQLError, print } from 'graphql'`
+        );
+      } else {
+        this._additionalImports.push(`import { GraphQLError } from 'graphql'`);
+      }
+    }
+
+    this._externalImportPrefix = this.config.importOperationTypesFrom
+      ? `${this.config.importOperationTypesFrom}.`
+      : "";
+  }
+
+  public OperationDefinition(node: OperationDefinitionNode) {
+    const operationName = node.name?.value;
+
+    if (!operationName) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `Anonymous GraphQL operation was ignored in "typescript-graphql-request", please make sure to name your operation: `,
+        print(node)
+      );
+
+      return null;
+    }
+
+    return super.OperationDefinition(node);
+  }
+
+  protected buildOperation(
+    node: OperationDefinitionNode,
+    documentVariableName: string,
+    operationType: string,
+    operationResultType: string,
+    operationVariablesTypes: string
+  ): string {
+    operationResultType = this._externalImportPrefix + operationResultType;
+    operationVariablesTypes =
+      this._externalImportPrefix + operationVariablesTypes;
+
+    this._operationsToInclude.push({
+      node,
+      documentVariableName,
+      operationType,
+      operationResultType,
+      operationVariablesTypes,
+    });
+
+    return null;
+  }
+
+  private getDocumentNodeVariable(documentVariableName: string): string {
+    return this.config.documentMode === DocumentMode.external
+      ? `Operations.${documentVariableName}`
+      : documentVariableName;
+  }
+
+  public get sdkContent(): string {
+    const extraVariables: string[] = [];
+    const allPossibleActions = this._operationsToInclude
+      .map((o) => {
+        const operationType = o.node.operation;
+        const operationName = o.node.name.value;
+        const optionalVariables =
+          !o.node.variableDefinitions ||
+          o.node.variableDefinitions.length === 0 ||
+          o.node.variableDefinitions.every(
+            (v) => v.type.kind !== Kind.NON_NULL_TYPE || v.defaultValue
+          );
+        const docVarName = this.getDocumentNodeVariable(o.documentVariableName);
+
+        let docArg;
+        if (this.config.rawRequest) {
+          docArg = docVarName;
+          if (this.config.documentMode !== DocumentMode.string) {
+            docArg = `${docVarName}String`;
+            extraVariables.push(`const ${docArg} = print(${docVarName});`);
+          }
+        }
+        if (o.node.operation === "subscription") {
+          if (!this.config.useWebSocketClient) return "";
+          if (this.config.rawRequest) {
+            return `${operationName}(${
+              optionalVariables
+                ? ""
+                : "variables: " + o.operationVariablesTypes + ", "
+            }subscriber: GraphQLSubscriber<${
+              o.operationResultType
+            }>): UnsubscribeCallback {
+                      return client.rawSubscribe(${docArg}, subscriber${
+              optionalVariables ? "" : ", variables"
+            });
+                  }`;
+          }
+          return `${operationName}(${
+            optionalVariables
+              ? ""
+              : "variables: " + o.operationVariablesTypes + ", "
+          }subscriber: GraphQLSubscriber<${
+            o.operationResultType
+          }>): UnsubscribeCallback {
+                    return client.subscribe(${docVarName}, subscriber${
+            optionalVariables ? "" : ", variables"
+          });
+                    }`;
+        } else {
+          if (this.config.useWebSocketClient) return "";
+          if (this.config.rawRequest) {
+            return `${operationName}(variables${
+              optionalVariables ? "?" : ""
+            }: ${
+              o.operationVariablesTypes
+            }, requestHeaders?: GraphQLClientRequestHeaders): Promise<{ data: ${
+              o.operationResultType
+            }; errors?: GraphQLError[]; extensions?: ${
+              this.config.extensionsType
+            }; headers: Headers; status: number; }> {
+                    return withWrapper((wrappedRequestHeaders) => client.rawRequest<${
+                      o.operationResultType
+                    }>(${docArg}, variables, {...requestHeaders, ...wrappedRequestHeaders}), '${operationName}', '${operationType}');
+                }`;
+          }
+          return `${operationName}(variables${optionalVariables ? "?" : ""}: ${
+            o.operationVariablesTypes
+          }, requestHeaders?: GraphQLClientRequestHeaders): Promise<${
+            o.operationResultType
+          }> {
+                    return withWrapper((wrappedRequestHeaders) => client.request<${
+                      o.operationResultType
+                    }>(${docVarName}, variables, {...requestHeaders, ...wrappedRequestHeaders}), '${operationName}', '${operationType}');
+                    }`;
+        }
+      })
+      .filter(Boolean)
+      .map((s) => indentMultiline(s, 2));
+
+    return `${additionalExportedTypes}
+
+const defaultWrapper: SdkFunctionWrapper = (action, _operationName, _operationType, variables) => action();
+${extraVariables.join("\n")}
+export function getSdk(client: ${
+      this.config.useWebSocketClient
+        ? "GraphQLWebSocketClient"
+        : "GraphQLClient"
+    }, withWrapper: SdkFunctionWrapper = defaultWrapper) {
+  return {
+${allPossibleActions.join(",\n")}
+  };
+}
+export type Sdk = ReturnType<typeof getSdk>;`;
+  }
+}

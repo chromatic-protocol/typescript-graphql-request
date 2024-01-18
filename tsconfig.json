@@ -1,0 +1,25 @@
+{
+  "extends": "@tsconfig/node16/tsconfig.json",
+  "compilerOptions": {
+    "lib": ["DOM", "DOM.Iterable", "ES2020"],
+    // Use ESM
+    "module": "NodeNext",
+    "moduleResolution": "nodenext",
+
+    "strict": false,
+
+    // DX
+    "sourceMap": true,
+    "declaration": true,
+    "declarationMap": true,
+    "incremental": true,
+    "tsBuildInfoFile": "node_modules/.cache/.tsbuildinfo",
+    "noErrorTruncation": true,
+
+    // Other
+    "skipLibCheck": true,
+    "esModuleInterop": true
+  },
+  "include": ["src", "tests", "examples"],
+  "exclude": ["build"]
+}

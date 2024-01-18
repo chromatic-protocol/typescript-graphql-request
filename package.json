@@ -1,0 +1,63 @@
+{
+  "name": "@chromatic-protocol/typescript-graphql-request",
+  "version": "0.0.0-rc.1",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">= 16.0.0"
+  },
+  "main": "dist/cjs/index.js",
+  "module": "dist/esm/index.js",
+  "exports": {
+    ".": {
+      "require": {
+        "types": "./dist/typings/index.d.cts",
+        "default": "./dist/cjs/index.js"
+      },
+      "import": {
+        "types": "./dist/typings/index.d.ts",
+        "default": "./dist/esm/index.js"
+      },
+      "default": {
+        "types": "./dist/typings/index.d.ts",
+        "default": "./dist/esm/index.js"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "typings": "dist/typings/index.d.ts",
+  "scripts": {
+    "lint": "eslint **/*.ts",
+    "test": "jest --no-watchman --config ../../../../jest.config.js",
+    "build": "yarn clean && yarn build:cjs && yarn build:esm",
+    "build:cjs": "yarn tsc --project tsconfig.cjs.json && echo '{\"type\":\"commonjs\"}' > build/cjs/package.json",
+    "build:esm": "yarn tsc --project tsconfig.esm.json",
+    "clean": "tsc --build --clean && rm -rf build"
+  },
+  "peerDependencies": {
+    "graphql": "^0.8.0 || ^0.9.0 || ^0.10.0 || ^0.11.0 || ^0.12.0 || ^0.13.0 || ^14.0.0 || ^15.0.0 || ^16.0.0",
+    "graphql-request": "^6.0.0",
+    "graphql-tag": "^2.0.0"
+  },
+  "dependencies": {
+    "@graphql-codegen/plugin-helpers": "^3.0.0",
+    "@graphql-codegen/visitor-plugin-common": "2.13.1",
+    "auto-bind": "~4.0.0",
+    "tslib": "~2.6.0"
+  },
+  "devDependencies": {
+    "@graphql-codegen/testing": "1.18.0",
+    "@graphql-tools/schema": "10.0.2",
+    "@tsconfig/node16": "^16.1.1",
+    "graphql": "^16.8.1",
+    "graphql-request": "6.0.0",
+    "typescript": "^5.0.4"
+  },
+  "publishConfig": {
+    "directory": "dist",
+    "access": "public"
+  },
+  "typescript": {
+    "definition": "dist/typings/index.d.ts"
+  }
+}
